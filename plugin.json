@@ -1,0 +1,1 @@
+{"id":"com.alloso.javascript.snippets","name":"JavaScript Snippets","version":"1.0.0","author":"EJ Alloso","description":"Provides a collection of JavaScript snippets for Acode editor.","main":"main.js","icon":"icon.png","readme":"readme.md","files":["javascript.json"],"minVersionCode":290}
