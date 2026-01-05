@@ -1,154 +1,114 @@
-class JavaScriptSnippetsPlugin {
+class JSSnippets {
   constructor() {
-    this.pluginId = "com.alloso.javascript.snippets";
-    this.snippets = [];
-    this.baseUrl = "";
-    this.registeredCommandNames = [];
-    this.customCompleter = null;
+    this.id = "com.alloso.javascript.snippets";
+    this.data = [];
+    this.root = "";
+    this.commands = [];
+    this.completer = null;
   }
 
-  async init($page, { cacheFileUrl, cacheFile, R }) {
+  async init($page, cache) {
     try {
-      const response = await fetch(this.baseUrl + 'javascript.json');
-      if (!response.ok) {
-        acode.showToast(`Error loading snippets: ${response.status}`, 5000);
-        console.error(`Error loading javascript.json: ${response.status} ${response.statusText}`);
-        return;
-      }
-      this.snippets = await response.json();
-      if (!Array.isArray(this.snippets)) {
-        acode.showToast("Snippets file is not a valid JSON array.", 5000);
-        console.error("Snippets file is not a valid JSON array.");
-        this.snippets = [];
+      const res = await fetch(`${this.root}javascript.json`);
+      
+      if (!res.ok) {
+        this.logError(`Load failed: ${res.status}`);
         return;
       }
 
-      this._registerCommandPaletteSnippets();
-      this._registerAceEditorCompleter();
+      const list = await res.json();
+      if (!Array.isArray(list)) {
+        this.logError("Invalid JSON format.");
+        return;
+      }
 
-    } catch (error) {
-      acode.showToast("Failed to initialize JavaScript Snippets plugin: " + error.message, 5000);
-      console.error("Error initializing JavaScript Snippets plugin:", error);
+      this.data = list;
+      this.setupPalette();
+      this.setupAutocomplete();
+
+    } catch (err) {
+      this.logError("Init error: " + err.message);
     }
   }
 
-  _registerCommandPaletteSnippets() {
-    if (this.snippets.length === 0) {
-      return;
-    }
-    this.registeredCommandNames = [];
-    let uniqueIdCounter = 0;
+  logError(msg) {
+    acode.showToast(msg, 5000);
+    console.error(`[JSSnippets] ${msg}`);
+  }
 
-    this.snippets.forEach(snippet => {
-      if (snippet && typeof snippet.prefix === 'string' && typeof snippet.code === 'string') {
-        const cleanPrefix = snippet.prefix.replace(/\W/g, '_');
-        const commandName = `js-snippet-cmd-${cleanPrefix}-${uniqueIdCounter++}`;
-        const commandDescription = snippet.description || `JS Snippet: ${snippet.prefix}`;
-
-        acode.define(commandName, {
-          exec: () => this.insertSnippetText(snippet.code),
-          value: commandDescription,
+  setupPalette() {
+    if (this.data.length === 0) return;
+    this.commands = [];
+    this.data.forEach((item, index) => {
+      if (item?.prefix && item?.code) {
+        const idName = `snippet-${item.prefix.replace(/\W/g, '_')}-${index}`;
+        acode.define(idName, {
+          exec: () => this.writeSnippet(item.code),
+          value: item.description || `Insert ${item.prefix}`,
         });
-        this.registeredCommandNames.push(commandName);
+        this.commands.push(idName);
       }
     });
   }
 
-  _registerAceEditorCompleter() {
-    if (!window.ace || this.snippets.length === 0) {
-      if (!window.ace) console.warn("Ace editor not available for completer registration.");
-      return;
-    }
-
+  setupAutocomplete() {
+    if (!window.ace || this.data.length === 0) return;
     try {
-      const langTools = ace.require("ace/ext/language_tools");
-      if (!langTools) {
-          console.error("Ace language_tools not found.");
-          acode.showToast("Ace language_tools not found for snippets.", 3000);
-          return;
-      }
-
-      this.customCompleter = {
+      const tools = ace.require("ace/ext/language_tools");
+      this.completer = {
         getCompletions: (editor, session, pos, prefix, callback) => {
-          const mode = session.getMode().$id;
-          if (mode !== 'ace/mode/javascript' && mode !== 'ace/mode/typescript' && mode !== 'ace/mode/jsx' && mode !== 'ace/mode/tsx') {
-            callback(null, []);
-            return;
-          }
+          const fileMode = session.getMode().$id;
+          const allowed = ['javascript', 'typescript', 'jsx', 'tsx'];
+          if (!allowed.some(m => fileMode.includes(m)) || !prefix) return callback(null, []);
 
-          if (prefix.length === 0) {
-            callback(null, []);
-            return;
-          }
-
-          const completions = this.snippets
-            .filter(s => s.prefix && typeof s.prefix === 'string' && s.prefix.toLowerCase().startsWith(prefix.toLowerCase()))
+          const matches = this.data
+            .filter(s => s.prefix?.toLowerCase().startsWith(prefix.toLowerCase()))
             .map(s => ({
               caption: s.prefix,
               snippet: s.code,
-              value: s.prefix,
-              meta: "Snippet", // Yahan badlav kiya gaya hai
-              score: s.score || 1000,
+              meta: "EJ Snippet",
+              score: 1000,
               type: "snippet"
             }));
-          callback(null, completions);
+          callback(null, matches);
         }
       };
-
-      langTools.addCompleter(this.customCompleter);
-    } catch (err) {
-      console.error("Error registering JavaScript snippet completer:", err);
-      acode.showToast("Error setting up snippet autocompleter.", 4000);
+      tools.addCompleter(this.completer);
+    } catch (e) {
+      this.logError("Autocomplete error.");
     }
   }
 
-  insertSnippetText(snippetCode) {
-    const editor = editorManager.editor;
-    if (editor && typeof editor.insertSnippet === 'function') {
-      editor.insertSnippet(snippetCode);
-    } else if (editor && typeof editor.insert === 'function') {
-      const simplifiedCode = snippetCode
-        .replace(/\$\{\d+:([^\}]+)\}/g, '$1')
-        .replace(/\$\d+/g, '');
-      editor.insert(simplifiedCode);
-    } else {
-      acode.showToast("No active editor or suitable insert method found.", 3000);
+  writeSnippet(content) {
+    const { editor } = editorManager;
+    if (editor?.insertSnippet) {
+      editor.insertSnippet(content);
+    } else if (editor) {
+      const clean = content.replace(/\$\{\d+:([^\}]+)\}/g, '$1').replace(/\$\d+/g, '');
+      editor.insert(clean);
     }
   }
 
   async destroy() {
-    this.registeredCommandNames.forEach(commandName => {
-      acode.undefine(commandName);
-    });
-    this.registeredCommandNames = [];
-
-    if (window.ace && this.customCompleter) {
-        try {
-            const langTools = ace.require("ace/ext/language_tools");
-            if (langTools && langTools.removeCompleter) {
-                 let completers = langTools.getCompleters ? langTools.getCompleters() : (langTools.textCompleter ? [langTools.textCompleter, langTools.keyWordCompleter] : []);
-                 if (Array.isArray(completers)) {
-                    langTools.setCompleters(completers.filter(c => c !== this.customCompleter));
-                 }
-            }
-        } catch(err) {
-            console.error("Error unregistering JavaScript snippet completer:", err);
-        }
-        this.customCompleter = null;
+    this.commands.forEach(cmd => acode.undefine(cmd));
+    if (window.ace && this.completer) {
+      const tools = ace.require("ace/ext/language_tools");
+      const list = tools.getCompleters();
+      if (Array.isArray(list)) {
+        tools.setCompleters(list.filter(c => c !== this.completer));
+      }
+      this.completer = null;
     }
   }
 }
 
 if (window.acode) {
-  const plugin = new JavaScriptSnippetsPlugin();
-  acode.setPluginInit(plugin.pluginId, async (baseUrl, $page, { cacheFileUrl, cacheFile, R }) => {
-    if (!baseUrl.endsWith('/')) {
-      baseUrl += '/';
-    }
-    plugin.baseUrl = baseUrl;
-    await plugin.init($page, { cacheFileUrl, cacheFile, R });
+  const jsPlugin = new JSSnippets();
+  
+  acode.setPluginInit(jsPlugin.id, async (baseUrl, $page, cache) => {
+    jsPlugin.root = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
+    await jsPlugin.init($page, cache);
   });
-  acode.setPluginUnmount(plugin.pluginId, () => {
-    plugin.destroy();
-  });
+
+  acode.setPluginUnmount(jsPlugin.id, () => jsPlugin.destroy());
 }
